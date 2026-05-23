@@ -1,0 +1,79 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #0f172a;
+  color: white;
+}
+
+.panel {
+  max-width: 900px;
+  margin: 40px auto;
+  padding: 30px;
+  text-align: center;
+}
+
+h1 {
+  font-size: 48px;
+  color: #38bdf8;
+}
+
+input, select, button {
+  padding: 10px;
+  margin: 8px;
+  border-radius: 8px;
+  border: none;
+}
+
+button {
+  background: #22c55e;
+  color: white;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+button:hover {
+  background: #16a34a;
+}
+
+.card, .panel div {
+  background: #1e293b;
+  margin: 15px auto;
+  padding: 18px;
+  border-radius: 14px;
+  max-width: 420px;
+}
+
+h2 {
+  color: #facc15;
+}
+
+h3 {
+  color: #93c5fd;
+}.stats{
+  display:flex;
+  gap:15px;
+  margin:20px 0;
+  flex-wrap:wrap;
+}
+
+.stat-card{
+  background:#1e1e1e;
+  padding:20px;
+  border-radius:15px;
+  min-width:160px;
+  text-align:center;
+  box-shadow:0 0 10px rgba(0,0,0,0.3);
+}
+
+.stat-card h3{
+  margin:0;
+  color:#aaa;
+  font-size:18px;
+}
+
+.stat-card p{
+  font-size:30px;
+  font-weight:bold;
+  margin-top:10px;
+  color:#00ff99;
+}
