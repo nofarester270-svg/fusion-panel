@@ -185,6 +185,9 @@ const comprar = async (plataforma) => {
       vendidoA: vendedor.nombre || vendedor.id,
     }
   );
+await updateDoc(doc(db, "plataformas", plataforma.id), {
+  stock: (plataforma.stock || 0) - 1,
+});
 
 await addDoc(collection(db, "ventas"), {
   vendedor: vendedor.nombre || vendedor.id,
