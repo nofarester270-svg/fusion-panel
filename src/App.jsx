@@ -260,6 +260,20 @@ if (!vendedor) {
     <p>{ventas.length}</p>
   </div>
 
+<h2>Historial de Ventas</h2>
+
+<div className="ventas">
+  {ventas.map((venta) => (
+    <div key={venta.id} className="card-venta">
+      <p><b>Vendedor:</b> {venta.vendedor}</p>
+      <p><b>Plataforma:</b> {venta.plataforma}</p>
+      <p><b>Precio:</b> S/{venta.precio}</p>
+      <p><b>Correo:</b> {venta.correo}</p>
+      <p><b>Perfil:</b> {venta.perfil}</p>
+    </div>
+  ))}
+</div>
+
   <div className="stat-card">
     <h3>Plataformas</h3>
     <p>{plataformas.length}</p>
