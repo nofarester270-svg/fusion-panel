@@ -213,6 +213,16 @@ setEntrega({
   pin: cuenta.pin,
 });
 
+const nuevaVenta = {
+  id: Date.now(),
+  vendedor: vendedor.nombre,
+  plataforma: plataforma.nombre,
+  precio: plataforma.precio,
+  correo: cuenta.correo,
+  perfil: cuenta.perfil
+};
+
+setVentas([nuevaVenta, ...ventas]);
 setHistorial([
 `Compra: ${plataforma.nombre} - S/${plataforma.precio}`,
   ...historial,
