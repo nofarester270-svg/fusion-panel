@@ -345,9 +345,13 @@ return (
 <p>Precio: S/{p.precio}</p>
 <p>Stock: {p.stock}</p>
 
-<button onClick={() => comprar(p)}>
-  Comprar
+<button
+  onClick={() => comprar(p)}
+  disabled={p.stock <= 0}
+>
+  {p.stock <= 0 ? "Sin stock" : "Comprar"}
 </button>
+
       </div>
     ))}
 <h2>Historial de Ventas</h2>
