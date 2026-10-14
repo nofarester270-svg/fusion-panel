@@ -51,7 +51,7 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;");
 }
 
-function mainMenu() {
+function mainMenu(chatId) {
   return {
     inline_keyboard: [
       [
@@ -60,6 +60,7 @@ function mainMenu() {
       ],
       [{ text: "📋 Mis compras", callback_data: "historial" }],
       [{ text: "🆘 Soporte", callback_data: "soporte" }],
+      ...(esAdministrador(chatId) ? [[{ text: "👑 Panel administrador", callback_data: "admin_menu" }]] : []),
     ],
   };
 }
@@ -117,7 +118,7 @@ async function showStart(chatId, firstName = "") {
   await sendMessage(
     chatId,
     `👋 Bienvenido, <b>${escapeHtml(seller.nombre || seller.usuario || "vendedor")}</b>.\n\nSelecciona una opción:`,
-    { reply_markup: mainMenu() }
+    { reply_markup: mainMenu(chatId) }
   );
 }
 
@@ -128,7 +129,7 @@ async function showBalance(chatId) {
   await sendMessage(
     chatId,
     `💰 <b>Saldo disponible:</b> ${Number(seller.saldo || 0).toFixed(2)} créditos`,
-    { reply_markup: mainMenu() }
+    { reply_markup: mainMenu(chatId) }
   );
 }
 
@@ -144,7 +145,7 @@ async function showPlatforms(chatId) {
 
   if (!platforms.length) {
     await sendMessage(chatId, "📦 No hay stock disponible en este momento.", {
-      reply_markup: mainMenu(),
+      reply_markup: mainMenu(chatId),
     });
     return;
   }
@@ -203,7 +204,7 @@ async function purchase(chatId, platformId) {
 
   if (available.empty) {
     await sendMessage(chatId, "❌ No quedan cuentas disponibles para esta plataforma.", {
-      reply_markup: mainMenu(),
+      reply_markup: mainMenu(chatId),
     });
     return;
   }
@@ -285,7 +286,7 @@ async function purchase(chatId, platformId) {
       PRECIO_INVALIDO: "⚠️ El precio de la plataforma no está configurado correctamente.",
     };
     await sendMessage(chatId, messages[lastError?.message] || "❌ No se pudo completar la compra.", {
-      reply_markup: mainMenu(),
+      reply_markup: mainMenu(chatId),
     });
     return;
   }
@@ -294,7 +295,7 @@ async function purchase(chatId, platformId) {
   await sendMessage(
     chatId,
     `✅ <b>Compra realizada</b>\n\n📺 Plataforma: <b>${escapeHtml(platformName)}</b>\n💳 Precio: <b>${price} créditos</b>\n\n📧 Correo: <code>${escapeHtml(account.correo || "No aplica")}</code>\n🔑 Contraseña: <code>${escapeHtml(account.contraseña || "No aplica")}</code>\n👤 Perfil: <code>${escapeHtml(account.perfil || "No aplica")}</code>\n🔢 PIN: <code>${escapeHtml(account.pin || "No aplica")}</code>\n\n💰 Saldo restante: <b>${newBalance.toFixed(2)}</b>`,
-    { reply_markup: mainMenu() }
+    { reply_markup: mainMenu(chatId) }
   );
 }
 
@@ -311,7 +312,7 @@ async function showHistory(chatId) {
 
   if (snap.empty) {
     await sendMessage(chatId, "📋 Aún no tienes compras registradas.", {
-      reply_markup: mainMenu(),
+      reply_markup: mainMenu(chatId),
     });
     return;
   }
@@ -326,8 +327,165 @@ async function showHistory(chatId) {
   });
 
   await sendMessage(chatId, `📋 <b>Tus últimas compras</b>\n\n${lines.join("\n\n")}`, {
-    reply_markup: mainMenu(),
+    reply_markup: mainMenu(chatId),
   });
+}
+
+
+// Solicitudes de soporte: flujo persistente en Firestore.
+// No se realizan reemplazos ni se consumen créditos en esta versión.
+const supportCollection = () => db().collection("soportes");
+const draftRef = (sellerId) => db().collection("borradoresSoporte").doc(sellerId);
+const pendingStates = ["pendiente", "en_revision"];
+
+async function currentOpenSupport(sellerId) {
+  const snap = await supportCollection().where("vendedorId", "==", sellerId).limit(50).get();
+  return snap.docs.find(d => pendingStates.includes(d.data().estado)) || null;
+}
+
+async function startSupport(chatId) {
+  const seller = await requireSeller(chatId);
+  if (!seller) return;
+  const suspension = seller.soporteSuspendidoHasta?.toDate?.();
+  if (suspension && suspension.getTime() > Date.now()) {
+    return sendMessage(chatId, `⛔ Tu soporte está suspendido hasta ${escapeHtml(suspension.toLocaleString("es-PE", { timeZone: "America/Lima" }))}.`);
+  }
+  const open = await currentOpenSupport(seller.id);
+  if (open) return sendMessage(chatId, `🕒 Ya tienes una solicitud abierta: <code>${open.id}</code>. Espera a que se resuelva.`);
+  const platforms = await db().collection("plataformas").get();
+  if (platforms.empty) return sendMessage(chatId, "No hay plataformas configuradas.");
+  await draftRef(seller.id).set({ paso: "plataforma", telegramId: String(chatId), actualizado: admin.firestore.FieldValue.serverTimestamp() });
+  const rows = platforms.docs.map(d => [{ text: String(d.data().nombre || d.id).slice(0, 55), callback_data: `sp:${d.id}` }]);
+  rows.push([{ text: "❌ Cancelar", callback_data: "sp_cancel" }]);
+  return sendMessage(chatId, "🆘 <b>Soporte</b>\nSelecciona la plataforma:", { reply_markup: { inline_keyboard: rows } });
+}
+
+async function cancelSupport(chatId) {
+  const seller = await requireSeller(chatId);
+  if (!seller) return;
+  await draftRef(seller.id).delete();
+  return sendMessage(chatId, "Solicitud cancelada.", { reply_markup: mainMenu(chatId) });
+}
+
+async function selectSupportPlatform(chatId, platformId) {
+  const seller = await requireSeller(chatId);
+  if (!seller) return;
+  const draft = await draftRef(seller.id).get();
+  if (!draft.exists || draft.data().paso !== "plataforma") return sendMessage(chatId, "Inicia nuevamente desde 🆘 Soporte.");
+  const platform = await db().collection("plataformas").doc(platformId).get();
+  if (!platform.exists) return sendMessage(chatId, "Plataforma no encontrada.");
+  await draft.ref.update({ paso: "correo", plataformaId: platformId, plataforma: platform.data().nombre || platformId });
+  return sendMessage(chatId, "📧 Escribe el correo de la cuenta que necesita soporte.\n\nPara cancelar: /cancelarsoporte");
+}
+
+async function receiveSupportStep(message, seller) {
+  const ref = draftRef(seller.id);
+  const snap = await ref.get();
+  if (!snap.exists) return false;
+  const draft = snap.data();
+  const text = String(message.text || "").trim();
+  if (draft.paso === "plataforma") return false;
+  if (draft.paso === "correo") {
+    if (!text || text.length > 250 || !text.includes("@")) {
+      await sendMessage(message.chat.id, "📧 Escribe un correo válido para continuar.");
+      return true;
+    }
+    await ref.update({ correo: text, paso: "problema" });
+    await sendMessage(message.chat.id, "📝 Describe brevemente el problema (por ejemplo: contraseña incorrecta, perfil bloqueado o error de acceso).");
+    return true;
+  }
+  if (draft.paso === "problema") {
+    if (!text || text.length > 1000) {
+      await sendMessage(message.chat.id, "Escribe una descripción de hasta 1000 caracteres.");
+      return true;
+    }
+    await ref.update({ problema: text, paso: "captura" });
+    await sendMessage(message.chat.id, "📷 Envía una captura del error como FOTO en este chat. No envíes contraseñas ni datos personales innecesarios.");
+    return true;
+  }
+  if (draft.paso === "captura") {
+    const photos = message.photo;
+    if (!Array.isArray(photos) || !photos.length) {
+      await sendMessage(message.chat.id, "📷 Necesito una imagen enviada como foto para completar el reporte.");
+      return true;
+    }
+    // Transactional guard: one open request per seller, even if Telegram retries.
+    const lock = db().collection("soportesActivos").doc(seller.id);
+    const newRef = supportCollection().doc();
+    try {
+      await db().runTransaction(async tx => {
+        const existing = await tx.get(lock);
+        if (existing.exists) throw new Error("SOPORTE_ABIERTO");
+        tx.create(lock, { solicitudId: newRef.id, creado: admin.firestore.FieldValue.serverTimestamp() });
+        tx.create(newRef, {
+          vendedorId: seller.id,
+          vendedor: seller.nombre || seller.usuario || seller.id,
+          telegramId: String(message.chat.id),
+          plataformaId: draft.plataformaId,
+          plataforma: draft.plataforma,
+          correo: draft.correo,
+          problema: draft.problema,
+          fotoFileId: photos[photos.length - 1].file_id,
+          estado: "pendiente",
+          creado: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+    } catch (err) {
+      if (err.message === "SOPORTE_ABIERTO") {
+        await ref.delete();
+        await sendMessage(message.chat.id, "🕒 Ya tienes una solicitud en trámite.");
+        return true;
+      }
+      throw err;
+    }
+    await ref.delete();
+    await sendMessage(message.chat.id, `✅ Solicitud enviada. Código: <code>${newRef.id}</code>. Te avisaremos cuando sea revisada.`, { reply_markup: mainMenu(message.chat.id) });
+    if (ADMIN_TELEGRAM_ID) {
+      try {
+        await sendMessage(ADMIN_TELEGRAM_ID, `🆘 <b>Nuevo soporte</b>\nVendedor: ${escapeHtml(seller.nombre || seller.usuario || seller.id)}\nPlataforma: ${escapeHtml(draft.plataforma)}\nCorreo: ${escapeHtml(draft.correo)}\nProblema: ${escapeHtml(draft.problema)}\nCódigo: <code>${newRef.id}</code>`, { reply_markup: { inline_keyboard: [[{ text: "👁️ Revisar", callback_data: `sa:${newRef.id}` }]] } });
+        await telegram("sendPhoto", { chat_id: ADMIN_TELEGRAM_ID, photo: photos[photos.length - 1].file_id });
+      } catch (err) { console.error("No se pudo notificar al administrador:", err); }
+    }
+    return true;
+  }
+  return false;
+}
+
+async function showAdmin(chatId) {
+  if (!esAdministrador(chatId)) return sendMessage(chatId, "🔒 No tienes permisos de administrador.");
+  const snap = await supportCollection().orderBy("creado", "desc").limit(30).get();
+  const pending = snap.docs.filter(d => d.data().estado === "pendiente");
+  const rows = pending.slice(0, 10).map(d => [{ text: `🆘 ${String(d.data().vendedor || "Vendedor").slice(0, 25)} · ${String(d.data().plataforma || "").slice(0, 20)}`, callback_data: `sa:${d.id}` }]);
+  rows.push([{ text: "⬅️ Menú", callback_data: "menu" }]);
+  return sendMessage(chatId, `👑 <b>Panel administrador</b>\nSolicitudes pendientes recientes: ${pending.length}${snap.size === 30 ? " (mostrando últimas 30)" : ""}`, { reply_markup: { inline_keyboard: rows } });
+}
+
+async function showAdminSupport(chatId, id) {
+  if (!esAdministrador(chatId)) return sendMessage(chatId, "🔒 Acceso denegado.");
+  const snap = await supportCollection().doc(id).get();
+  if (!snap.exists) return sendMessage(chatId, "Solicitud no encontrada.");
+  const d = snap.data();
+  const rows = d.estado === "pendiente" ? [[{ text: "✅ Aprobar para revisión", callback_data: `sr:aprobar:${id}` }, { text: "❌ Rechazar", callback_data: `sr:rechazar:${id}` }]] : [];
+  rows.push([{ text: "👑 Volver", callback_data: "admin_menu" }]);
+  return sendMessage(chatId, `🆘 <b>Solicitud</b>\nCódigo: <code>${id}</code>\nEstado: ${escapeHtml(d.estado)}\nVendedor: ${escapeHtml(d.vendedor)}\nPlataforma: ${escapeHtml(d.plataforma)}\nCorreo: ${escapeHtml(d.correo)}\nProblema: ${escapeHtml(d.problema)}\n\n⚠️ Aprobar solo marca para revisión; NO entrega cuentas.`, { reply_markup: { inline_keyboard: rows } });
+}
+
+async function resolveAdminSupport(chatId, action, id) {
+  if (!esAdministrador(chatId)) return sendMessage(chatId, "🔒 Acceso denegado.");
+  if (!["aprobar", "rechazar"].includes(action)) return;
+  const ref = supportCollection().doc(id);
+  const result = await db().runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    if (!snap.exists || snap.data().estado !== "pendiente") return null;
+    const d = snap.data();
+    tx.update(ref, { estado: action === "aprobar" ? "en_revision" : "rechazado", revisado: admin.firestore.FieldValue.serverTimestamp(), revisadoPor: String(chatId) });
+    if (action === "rechazar") tx.delete(db().collection("soportesActivos").doc(d.vendedorId));
+    return d;
+  });
+  if (!result) return sendMessage(chatId, "La solicitud ya fue procesada o no existe.");
+  const label = action === "aprobar" ? "en revisión por el administrador" : "rechazada";
+  await sendMessage(chatId, `Solicitud <code>${id}</code>: ${label}.`);
+  await sendMessage(result.telegramId, `🆘 Tu solicitud <code>${id}</code> fue ${label}.`);
 }
 
 async function handleCallback(callback) {
@@ -341,10 +499,14 @@ async function handleCallback(callback) {
   if (data === "saldo") return showBalance(chatId);
   if (data === "comprar") return showPlatforms(chatId);
   if (data === "historial") return showHistory(chatId);
-  if (data === "soporte") {
-    return sendMessage(chatId, "🆘 Para soporte, comunícate con el administrador de Fusion Cuentas.", {
-      reply_markup: mainMenu(),
-    });
+  if (data === "soporte") return startSupport(chatId);
+  if (data === "sp_cancel") return cancelSupport(chatId);
+  if (data.startsWith("sp:")) return selectSupportPlatform(chatId, data.slice(3));
+  if (data === "admin_menu") return showAdmin(chatId);
+  if (data.startsWith("sa:")) return showAdminSupport(chatId, data.slice(3));
+  if (data.startsWith("sr:")) {
+    const parts = data.split(":");
+    return resolveAdminSupport(chatId, parts[1], parts.slice(2).join(":"));
   }
   if (data.startsWith("plataforma:")) return showPlatform(chatId, data.slice(11));
   if (data.startsWith("confirmar:")) return purchase(chatId, data.slice(10));
@@ -354,16 +516,7 @@ async function handleMessage(message) {
   const chatId = message.chat?.id;
   if (!chatId) return;
 
-  if (message.text?.trim() === "/admin") {
-    if (!esAdministrador(chatId)) {
-      return sendMessage(chatId, "🔒 No tienes permisos de administrador.");
-    }
-
-    return sendMessage(
-      chatId,
-      "👑 <b>Panel de administrador - Fusion Cuentas</b>\n\n✅ Tu Telegram ha sido reconocido como administrador.\n\nPróximamente podrás gestionar solicitudes de soporte desde aquí."
-    );
-  }
+  if (message.text?.trim() === "/admin") return showAdmin(chatId);
 
   const text = String(message.text || "").trim().toLowerCase();
   if (text === "/start" || text === "menu" || text === "/menu") {
@@ -372,9 +525,13 @@ async function handleMessage(message) {
   if (text === "saldo" || text === "/saldo") return showBalance(chatId);
   if (text === "comprar" || text === "/comprar") return showPlatforms(chatId);
   if (text === "historial" || text === "/historial") return showHistory(chatId);
+  if (text === "/soporte") return startSupport(chatId);
+  if (text === "/cancelarsoporte") return cancelSupport(chatId);
+  const seller = await findSeller(chatId);
+  if (seller && await receiveSupportStep(message, seller)) return;
 
   return sendMessage(chatId, "No entendí ese mensaje. Usa el menú:", {
-    reply_markup: mainMenu(),
+    reply_markup: mainMenu(chatId),
   });
 }
 
